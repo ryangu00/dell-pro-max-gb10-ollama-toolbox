@@ -1,38 +1,38 @@
-# Ollama 工具模型合集 on Dell Pro Max with GB10 —— 视觉兜底与轻量抽取
+# Ollama Toolbox Models on Dell Pro Max with GB10 — Vision Fallback and Lightweight Extraction
 
-> 大模型主力之外,总需要几个"工具位"小模型:视觉兜底、网页抽取、embedding。
-> 这本书是我们 Ollama 工具位的完整配置与两个 thinking 相关的坑。
+> Beyond your main workhorse LLM, you always need a few "utility slot" models: vision fallback, web-page extraction, embedding.
+> This book is the complete configuration of our Ollama utility slots, plus two thinking-related pitfalls.
 
-## 一键部署
+## One-command deploy
 
-`scripts/deploy.sh`——拉两个工具位→视觉位关思考验证(秒级断言+content 非空+无 `<think>` 泄漏)→抽取位验证。
+`scripts/deploy.sh` — pulls the two utility models → verifies the vision slot with thinking disabled (second-level latency assertion + non-empty content + no `<think>` leakage) → verifies the extraction slot.
 
-## 工具位清单
+## Utility slot roster
 
-| 模型 | 用途 | 关键配置 |
+| Model | Purpose | Key configuration |
 |---|---|---|
-| `qwen3-vl:32b` | 视觉兜底(主力视觉链路挂掉时的图片理解) | **thinking 必须双保险关**(见坑 #1) |
-| `qwen3:4b` | 网页正文抽取/轻量结构化(快、便宜、够用) | 无特殊配置;超时给足(长网页) |
-| 自训 embedding | 知识库检索(见本系列 embedding 训练篇) | `num_batch 16384` |
+| `qwen3-vl:32b` | Vision fallback (image understanding when the primary vision path is down) | **thinking must be disabled at both layers** (see pitfall #1) |
+| `qwen3:4b` | Web-page body extraction / lightweight structuring (fast, cheap, good enough) | No special config; give it a generous timeout (long pages) |
+| Self-trained embedding | Knowledge-base retrieval (see the embedding-training book in this series) | `num_batch 16384` |
 
-## 坑 #1:thinking 不关,视觉请求超时到怀疑人生
+## Pitfall #1: leave thinking on, and vision requests time out until you question your sanity
 
-`qwen3-vl:32b` 默认开思考。32B 模型对着一张图思考起来,**单请求实测可拖到 289 秒**——上游一律超时,表现为"视觉兜底彻底不可用",但服务本身健康、日志无错。
-**修法是双保险**(单一开关在不同调用路径下会漏):
-1. 模型级:Modelfile/请求参数关 thinking;
-2. 调用级:请求体里显式 `chat_template_kwargs: {"enable_thinking": false}`(或该模型家族的对应键)。
-两层都设,任何一条调用路径都关得住。验证:`usage` 的 reasoning token ≈0 且响应时间从百秒级降到秒级。
+`qwen3-vl:32b` ships with thinking enabled by default. Point a 32B model at an image and let it think, and **a single request can drag out to 289 seconds measured** — everything upstream times out, and it looks like "vision fallback is completely dead" while the service itself is healthy and the logs show no errors.
+**The fix is a double safety** (a single switch gets missed on some call paths):
+1. Model level: disable thinking in the Modelfile / request parameters;
+2. Call level: set `chat_template_kwargs: {"enable_thinking": false}` explicitly in the request body (or the equivalent key for that model family).
+With both layers set, every call path stays covered. Verify: reasoning tokens in `usage` ≈ 0 and response time drops from hundreds of seconds to seconds.
 
-## 坑 #2:thinking 泄漏进 content(旧版 Ollama 兼容层)
+## Pitfall #2: thinking leaks into content (older Ollama compatibility layer)
 
-某些版本的 Ollama OpenAI 兼容层有"content fallback"行为:上游解析不出正文时,会把**思维链原文提升成 content 返回**——下游拿到的"答案"其实是模型的碎碎念。我们在实际链路里撞到过(当时版本存在、后续版本已修;触发条件=thinking 开+正文为空的组合)。
-**防御(与版本无关的习惯)**:消费 thinking 模型输出时,永远检查 content 是否以 `<think>`/成段推理开头;工具位模型一律关思考,从源头消掉这类问题。
+Some versions of Ollama's OpenAI compatibility layer have a "content fallback" behavior: when it can't parse a body out of the upstream response, it **promotes the raw chain-of-thought to content and returns it** — the "answer" your downstream receives is actually the model's rambling. We hit this in a real pipeline (the version at the time had it; later versions fixed it; trigger condition = thinking on + empty body).
+**Defense (a version-independent habit)**: when consuming output from a thinking model, always check whether content starts with `<think>` / a block of reasoning; and disable thinking on all utility-slot models to kill this class of problem at the source.
 
-## 工具位设计原则(我们的实践)
+## Utility slot design principles (our practice)
 
-- **工具位模型一律关思考**:工具位要的是快、稳、格式可预期;思考带来的质量增益在"抽正文/看图说话"这类任务上不值它的延迟。
-- 工具位与主力**分端口部署**,主力升级/重启不影响工具位可用性。
-- 每个工具位配一条**独立健康探针**(固定输入断言输出形态),别依赖主力链路的健康检查捎带。
+- **Disable thinking on every utility-slot model**: utility slots need fast, stable, format-predictable output; the quality gain from thinking isn't worth its latency on tasks like "extract the body" or "describe the image".
+- Deploy utility slots and the primary model on **separate ports**, so primary upgrades/restarts never take the utility slots down.
+- Give each utility slot its own **independent health probe** (fixed input, assert on output shape) — don't piggyback on the primary pipeline's health check.
 
 ---
-*RyanAI Lab · 工具位配置实录,更新于 2026-09。欢迎 issue 反馈。*
+*RyanAI Lab · All numbers measured on our resident environment. Updated 2026-09. Issues welcome.*
